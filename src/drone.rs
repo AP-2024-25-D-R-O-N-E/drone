@@ -4,8 +4,8 @@ use crossbeam::{
     channel::{Receiver, Sender},
     select,
 };
-use wg_2024::drone::Drone as DroneTrait;
 use wg_2024::{controller::Command, network::NodeId, packet::Packet};
+use wg_2024::{drone::Drone as DroneTrait, packet::PacketType};
 
 #[derive(Debug)]
 pub struct MyDrone {
@@ -19,10 +19,11 @@ pub struct MyDrone {
 }
 
 impl DroneTrait for MyDrone {
+    
+    /// since this function is giving me massive ???? for missing the initialization of the sending packets, we won't use it ig
     fn new(options: wg_2024::drone::DroneOptions) -> Self {
         todo!()
 
-        // since this function is giving me massive ???? for missing the initialization of the sending packets, we won't use it ig
     }
 
     fn run(&mut self) {
@@ -34,15 +35,15 @@ impl DroneTrait for MyDrone {
 
                         //temporary and just for testing
                         println!("received packet at drone {}", self.drone_id);
-                        self.forward_packet(packet);
 
-                        // match packet.pack_type {
-                        //     PacketType::Nack(nack) => todo!(),
-                        //     PacketType::Ack(ack) => todo!(),
-                        //     PacketType::MsgFragment(fragment) => todo!(),
-                        //     PacketType::Query(query) => todo!(),
-                        //     PacketType::QueryResult(query_result) => todo!(),
-                        // }
+                        //remember to remove the underscores when you actually start using the variable ig
+                        match &packet.pack_type {
+                            PacketType::Nack(_nack) => self.forward_packet(packet),
+                            PacketType::Ack(_ack) => self.forward_packet(packet),
+                            PacketType::MsgFragment(_fragment) => self.forward_packet(packet),
+                            // PacketType::Query(query) => todo!(), //not in the specification still although it was voted for already
+                            // PacketType::QueryResult(query_result) => todo!(), //same issue
+                        }
                     }
                 },
                 recv(self.sim_contr_recv) -> command_res => {
@@ -56,7 +57,8 @@ impl DroneTrait for MyDrone {
 }
 
 impl MyDrone {
-    fn new_drone(
+    /// reminder that this is a temporary function until we sort out the send channels being implemented in the drone trait API
+    pub fn new_drone(
         id: NodeId,
         scs: Sender<Command>,
         scr: Receiver<Command>,
