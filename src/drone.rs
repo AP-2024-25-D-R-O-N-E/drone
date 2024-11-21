@@ -19,11 +19,9 @@ pub struct MyDrone {
 }
 
 impl DroneTrait for MyDrone {
-    
     /// since this function is giving me massive ???? for missing the initialization of the sending packets, we won't use it ig
     fn new(options: wg_2024::drone::DroneOptions) -> Self {
         todo!()
-
     }
 
     fn run(&mut self) {
@@ -38,11 +36,11 @@ impl DroneTrait for MyDrone {
 
                         //remember to remove the underscores when you actually start using the variable ig
                         match &packet.pack_type {
-                            PacketType::Nack(_nack) => self.forward_packet(packet),
-                            PacketType::Ack(_ack) => self.forward_packet(packet),
-                            PacketType::MsgFragment(_fragment) => self.forward_packet(packet),
-                            // PacketType::Query(query) => todo!(), //not in the specification still although it was voted for already
-                            // PacketType::QueryResult(query_result) => todo!(), //same issue
+                            PacketType::Nack(_nack)=>self.forward_packet(packet),
+                            PacketType::Ack(_ack)=>self.forward_packet(packet),
+                            PacketType::MsgFragment(_fragment)=>self.forward_packet(packet),
+                            PacketType::FloodRequest(flood_request) => self.forward_packet(packet),
+                            PacketType::FloodResponse(flood_response) => self.forward_packet(packet),
                         }
                     }
                 },
