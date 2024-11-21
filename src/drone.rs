@@ -4,8 +4,9 @@ use crossbeam::{
     channel::{Receiver, Sender},
     select,
 };
-use wg_2024::{controller::Command, network::NodeId, packet::Packet};
+use wg_2024::{controller::Command, network::{NodeId, SourceRoutingHeader}, packet::{Fragment, Nack, NackType, Packet}};
 use wg_2024::{drone::Drone as DroneTrait, packet::PacketType};
+
 
 #[derive(Debug)]
 pub struct MyDrone {
@@ -38,10 +39,12 @@ impl DroneTrait for MyDrone {
                         match &packet.pack_type {
                             PacketType::Nack(_nack)=>self.forward_packet(packet),
                             PacketType::Ack(_ack)=>self.forward_packet(packet),
-                            PacketType::MsgFragment(_fragment)=>self.forward_packet(packet),
+                            PacketType::MsgFragment(fragment)=>self.handle_MsgFragment(&packet, &fragment),
                             PacketType::FloodRequest(flood_request) => self.forward_packet(packet),
                             PacketType::FloodResponse(flood_response) => self.forward_packet(packet),
                         }
+
+                        
                     }
                 },
                 recv(self.sim_contr_recv) -> command_res => {
@@ -98,6 +101,46 @@ impl MyDrone {
             println!("packet sent from {}", self.drone_id);
         } else {
             //this means the channel isn't connected, should spawn error
+        }
+    }
+
+    fn handle_MsgFragment(&self,  packet: &Packet, fragment: &Fragment){
+        use rand::Rng;
+
+        let prob: u8 = rand::thread_rng().gen_range(0 .. 100);
+        if prob < self.pdr  {
+            //reversing the rout up to this point
+
+            let mut new_route = packet.routing_header.hops.clone();
+            new_route.truncate(packet.routing_header.hop_index);
+            
+            //reverses the array
+            for i in new_route.len()-2 .. 0 {
+                let node = new_route.remove(i);
+                new_route.push(node);
+            }
+
+            let nack = Nack{
+                fragment_index: fragment.fragment_index,
+                time_of_fail: std::time::Instant::now(),
+                nack_type: NackType::Dropped
+            };
+
+            
+            //creates a new "Nack packet" with a new route  
+            let new_packet = Packet{
+                pack_type: PacketType::Nack(nack),
+                routing_header: SourceRoutingHeader{
+                    hop_index:0,
+                    hops: new_route
+                },
+                session_id: packet.session_id
+            };
+
+            self.forward_packet(new_packet);
+
+        } else {
+            self.forward_packet(packet.clone());
         }
     }
 }
