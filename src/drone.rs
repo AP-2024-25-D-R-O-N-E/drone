@@ -33,13 +33,13 @@ impl DroneTrait for MyDrone {
                     // each match branch may call a function to handle it to make it more readable
 
                         //temporary and just for testing
-                        println!("received packet at drone {}", self.drone_id);
+                        println!("received packet at drone {} with id {}", self.drone_id, packet.session_id);
 
                         //remember to remove the underscores when you actually start using the variable ig
                         match &packet.pack_type {
                             PacketType::Nack(_nack)=>self.forward_packet(packet),
                             PacketType::Ack(_ack)=>self.forward_packet(packet),
-                            PacketType::MsgFragment(fragment)=>self.handle_MsgFragment(&packet, &fragment),
+                            PacketType::MsgFragment(fragment)=>self.handle_MsgFragment(packet),
                             PacketType::FloodRequest(flood_request) => self.forward_packet(packet),
                             PacketType::FloodResponse(flood_response) => self.forward_packet(packet),
                         }
@@ -104,43 +104,28 @@ impl MyDrone {
         }
     }
 
-    fn handle_MsgFragment(&self,  packet: &Packet, fragment: &Fragment){
+    fn handle_MsgFragment(&self,  mut packet: Packet){
         use rand::Rng;
 
         let prob: u8 = rand::thread_rng().gen_range(0 .. 100);
         if prob < self.pdr  {
             //reversing the rout up to this point
 
-            let mut new_route = packet.routing_header.hops.clone();
-            new_route.truncate(packet.routing_header.hop_index);
-            
-            //reverses the array
-            for i in new_route.len()-2 .. 0 {
-                let node = new_route.remove(i);
-                new_route.push(node);
+            packet.routing_header.hops.truncate(packet.routing_header.hop_index);
+            packet.routing_header.hops.reverse();
+
+            if let PacketType::MsgFragment(fragment) = packet.pack_type {
+                let nack = Nack{
+                    fragment_index: fragment.fragment_index,
+                    time_of_fail: std::time::Instant::now(),
+                    nack_type: NackType::Dropped
+                };
+    
+                packet.pack_type = PacketType::Nack(nack);
             }
-
-            let nack = Nack{
-                fragment_index: fragment.fragment_index,
-                time_of_fail: std::time::Instant::now(),
-                nack_type: NackType::Dropped
-            };
-
-            
-            //creates a new "Nack packet" with a new route  
-            let new_packet = Packet{
-                pack_type: PacketType::Nack(nack),
-                routing_header: SourceRoutingHeader{
-                    hop_index:0,
-                    hops: new_route
-                },
-                session_id: packet.session_id
-            };
-
-            self.forward_packet(new_packet);
-
-        } else {
-            self.forward_packet(packet.clone());
         }
+
+        self.forward_packet(packet);
     }
+
 }
