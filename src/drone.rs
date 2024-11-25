@@ -33,13 +33,13 @@ impl DroneTrait for MyDrone {
                     // each match branch may call a function to handle it to make it more readable
 
                         //temporary and just for testing
-                        println!("received packet at drone {} with id {}", self.drone_id, packet.session_id);
+                        println!("received packet at drone {}, Packet: {:?}", self.drone_id, packet);
 
                         //remember to remove the underscores when you actually start using the variable ig
                         match &packet.pack_type {
                             PacketType::Nack(_nack)=>self.forward_packet(packet),
                             PacketType::Ack(_ack)=>self.forward_packet(packet),
-                            PacketType::MsgFragment(fragment)=>self.handle_MsgFragment(packet),
+                            PacketType::MsgFragment(fragment)=>self.handle_MsgFragment(fragment.fragment_index, packet),
                             PacketType::FloodRequest(flood_request) => self.forward_packet(packet),
                             PacketType::FloodResponse(flood_response) => self.forward_packet(packet),
                         }
@@ -104,25 +104,24 @@ impl MyDrone {
         }
     }
 
-    fn handle_MsgFragment(&self,  mut packet: Packet){
+    fn handle_MsgFragment(&self, index: u64, mut packet: Packet){
         use rand::Rng;
 
         let prob: u8 = rand::thread_rng().gen_range(0 .. 100);
         if prob < self.pdr  {
             //reversing the rout up to this point
-
             packet.routing_header.hops.truncate(packet.routing_header.hop_index);
             packet.routing_header.hops.reverse();
 
-            if let PacketType::MsgFragment(fragment) = packet.pack_type {
-                let nack = Nack{
-                    fragment_index: fragment.fragment_index,
-                    time_of_fail: std::time::Instant::now(),
-                    nack_type: NackType::Dropped
-                };
+            //packet becomes Nack type and gets forwarded
+            let nack = Nack{
+                fragment_index: index,
+                time_of_fail: std::time::Instant::now(),
+                nack_type: NackType::Dropped
+            };
     
                 packet.pack_type = PacketType::Nack(nack);
-            }
+            
         }
 
         self.forward_packet(packet);
