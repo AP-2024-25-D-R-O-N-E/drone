@@ -91,7 +91,7 @@ impl MyDrone {
         let next_send = self.packet_send.get(&next_node);
 
         if let Some(send_channel) = next_send {
-            println!("packet sent from {}, Packet: {:?}", self.drone_id, packet);
+            println!("packet sent from {}, Packet: {:?}, {:?}", self.drone_id, packet.session_id, packet.pack_type);
             
             let res = send_channel.send(packet);
 
