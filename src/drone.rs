@@ -112,7 +112,7 @@ impl MyDrone {
         let prob: u8 = rand::thread_rng().gen_range(0 .. 100);
         if prob < self.pdr  {
             //reversing the route up to this point
-            packet.routing_header.hops.truncate(packet.routing_header.hop_index);
+            packet.routing_header.hops.truncate(packet.routing_header.hop_index + 1);
             packet.routing_header.hops.reverse();
             packet.routing_header.hop_index = 0;
 
