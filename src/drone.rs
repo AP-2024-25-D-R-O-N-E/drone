@@ -33,7 +33,7 @@ impl DroneTrait for MyDrone {
                     // each match branch may call a function to handle it to make it more readable
 
                         //temporary and just for testing
-                        println!("packet sent from {}, Packet: {:?}, {:?}", self.drone_id, packet.session_id, packet.pack_type);
+                        println!("packet received from {}, Packet: {:?}, {:?}", self.drone_id, packet.session_id, packet.pack_type);
 
                         //remember to remove the underscores when you actually start using the variable ig
                         match &packet.pack_type {
@@ -114,6 +114,7 @@ impl MyDrone {
             //reversing the route up to this point
             packet.routing_header.hops.truncate(packet.routing_header.hop_index);
             packet.routing_header.hops.reverse();
+            packet.routing_header.hop_index = 0;
 
             //packet becomes Nack type and gets forwarded
             let nack = Nack{
