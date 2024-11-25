@@ -118,7 +118,6 @@ impl MyDrone {
             //packet becomes Nack type and gets forwarded
             let nack = Nack{
                 fragment_index: index,
-                time_of_fail: std::time::Instant::now(),
                 nack_type: NackType::Dropped
             };
     
