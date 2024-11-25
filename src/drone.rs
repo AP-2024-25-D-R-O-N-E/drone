@@ -91,6 +91,8 @@ impl MyDrone {
         let next_send = self.packet_send.get(&next_node);
 
         if let Some(send_channel) = next_send {
+            println!("packet sent from {}, Packet: {:?}", self.drone_id, packet);
+            
             let res = send_channel.send(packet);
 
             if res.is_err() {
@@ -98,7 +100,7 @@ impl MyDrone {
             }
 
             // just testing
-            println!("packet sent from {}", self.drone_id);
+            
         } else {
             //this means the channel isn't connected, should spawn error
         }
@@ -109,7 +111,7 @@ impl MyDrone {
 
         let prob: u8 = rand::thread_rng().gen_range(0 .. 100);
         if prob < self.pdr  {
-            //reversing the rout up to this point
+            //reversing the route up to this point
             packet.routing_header.hops.truncate(packet.routing_header.hop_index);
             packet.routing_header.hops.reverse();
 
