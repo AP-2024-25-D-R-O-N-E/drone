@@ -33,7 +33,7 @@ impl DroneTrait for MyDrone {
                     // each match branch may call a function to handle it to make it more readable
 
                         //temporary and just for testing
-                        println!("received packet at drone {}, Packet: {:?}", self.drone_id, packet);
+                        println!("packet sent from {}, Packet: {:?}, {:?}", self.drone_id, packet.session_id, packet.pack_type);
 
                         //remember to remove the underscores when you actually start using the variable ig
                         match &packet.pack_type {
