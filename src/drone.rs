@@ -4,8 +4,9 @@ use crossbeam::{
     channel::{Receiver, Sender},
     select,
 };
-use wg_2024::{controller::Command, network::NodeId, packet::Packet};
+use wg_2024::{controller::Command, network::{NodeId, SourceRoutingHeader}, packet::{Fragment, Nack, NackType, Packet}};
 use wg_2024::{drone::Drone as DroneTrait, packet::PacketType};
+
 
 #[derive(Debug)]
 pub struct MyDrone {
@@ -32,16 +33,18 @@ impl DroneTrait for MyDrone {
                     // each match branch may call a function to handle it to make it more readable
 
                         //temporary and just for testing
-                        println!("received packet at drone {}", self.drone_id);
+                        println!("packet received from {}, Packet: {:?}, {:?}", self.drone_id, packet.session_id, packet.pack_type);
 
                         //remember to remove the underscores when you actually start using the variable ig
                         match &packet.pack_type {
                             PacketType::Nack(_nack)=>self.forward_packet(packet),
                             PacketType::Ack(_ack)=>self.forward_packet(packet),
-                            PacketType::MsgFragment(_fragment)=>self.forward_packet(packet),
+                            PacketType::MsgFragment(fragment)=>self.handle_MsgFragment(fragment.fragment_index, packet),
                             PacketType::FloodRequest(flood_request) => self.forward_packet(packet),
                             PacketType::FloodResponse(flood_response) => self.forward_packet(packet),
                         }
+
+                        
                     }
                 },
                 recv(self.sim_contr_recv) -> command_res => {
@@ -88,6 +91,8 @@ impl MyDrone {
         let next_send = self.packet_send.get(&next_node);
 
         if let Some(send_channel) = next_send {
+            println!("packet sent from {}, Packet: {:?}, {:?}", self.drone_id, packet.session_id, packet.pack_type);
+            
             let res = send_channel.send(packet);
 
             if res.is_err() {
@@ -95,9 +100,33 @@ impl MyDrone {
             }
 
             // just testing
-            println!("packet sent from {}", self.drone_id);
+            
         } else {
             //this means the channel isn't connected, should spawn error
         }
     }
+
+    fn handle_MsgFragment(&self, index: u64, mut packet: Packet){
+        use rand::Rng;
+
+        let prob: u8 = rand::thread_rng().gen_range(0 .. 100);
+        if prob < self.pdr  {
+            //reversing the route up to this point
+            packet.routing_header.hops.truncate(packet.routing_header.hop_index + 1);
+            packet.routing_header.hops.reverse();
+            packet.routing_header.hop_index = 0;
+
+            //packet becomes Nack type and gets forwarded
+            let nack = Nack{
+                fragment_index: index,
+                nack_type: NackType::Dropped
+            };
+    
+                packet.pack_type = PacketType::Nack(nack);
+            
+        }
+
+        self.forward_packet(packet);
+    }
+
 }
