@@ -7,6 +7,7 @@ use crossbeam::{
 use rand::seq::index;
 use wg_2024::{
     controller::{DroneCommand, NodeEvent},
+    drone::DroneOptions,
     network::NodeId,
     packet::{Nack, NackType, Packet},
 };
@@ -24,7 +25,7 @@ pub struct MyDrone {
 }
 
 impl DroneTrait for MyDrone {
-    fn new(options: wg_2024::drone::DroneOptions) -> Self {
+    fn new(options: DroneOptions) -> Self {
         MyDrone {
             drone_id: options.id,
             sim_contr_send: options.controller_send,
