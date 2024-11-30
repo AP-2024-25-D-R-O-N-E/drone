@@ -4,35 +4,36 @@ use crossbeam::{
     channel::{select_biased, Receiver, Sender},
     select,
 };
+use rand::seq::index;
 use wg_2024::{
-    controller::Command,
-    network::{NodeId, SourceRoutingHeader},
-    packet::{Fragment, Nack, NackType, Packet},
+    controller::{DroneCommand, NodeEvent},
+    network::NodeId,
+    packet::{Nack, NackType, Packet},
 };
 use wg_2024::{drone::Drone as DroneTrait, packet::PacketType};
 
 #[derive(Debug)]
 pub struct MyDrone {
     drone_id: NodeId,
-    sim_contr_send: Sender<Command>,              //Not packet.
-    sim_contr_recv: Receiver<Command>,            //Not packet.
+    sim_contr_send: Sender<NodeEvent>,            //Not packet.
+    sim_contr_recv: Receiver<DroneCommand>,       //Not packet.
     packet_send: HashMap<NodeId, Sender<Packet>>, //All the sender to other nodes.
     packet_recv: Receiver<Packet>, //This drone receiver, that will be linked to a sender given to every other drone.
     pdr: u8,                       //Would keep it in % to occupy less space, but could be f32.
     floods_tracker: HashMap<NodeId, u64>, //not in the specification yet but will likely be needed to handle the Network Discovery Protocol
 }
 
-pub enum f {
-    ErrorInRouting(NodeId), // contains id of not neighbor
-    DestinationIsDrone,
-    Dropped,
-    UnexpectedRecipient(NodeId),
-}
-
 impl DroneTrait for MyDrone {
-    /// since this function is giving me massive ???? for missing the initialization of the sending packets, we won't use it ig
     fn new(options: wg_2024::drone::DroneOptions) -> Self {
-        todo!()
+        MyDrone {
+            drone_id: options.id,
+            sim_contr_send: options.controller_send,
+            sim_contr_recv: options.controller_recv,
+            packet_send: options.packet_send,
+            packet_recv: options.packet_recv,
+            pdr: (options.pdr * 100.0) as u8,
+            floods_tracker: HashMap::new(),
+        }
     }
 
     fn run(&mut self) {
@@ -63,7 +64,7 @@ impl DroneTrait for MyDrone {
                                 index = fragment.fragment_index;
                             }
 
-                            self.create_nack(packet, NackType::UnexpectedRecipient(node_id), index);
+                            self.create_nack(index, packet, NackType::UnexpectedRecipient(node_id));
 
                             //go to next loop
                             continue;
@@ -86,37 +87,20 @@ impl DroneTrait for MyDrone {
     }
 }
 
-
 impl MyDrone {
-    /// reminder that this is a temporary function until we sort out the send channels being implemented in the drone trait API
-    pub fn new_drone(
-        id: NodeId,
-        scs: Sender<Command>,
-        scr: Receiver<Command>,
-        ps: HashMap<NodeId, Sender<Packet>>,
-        pr: Receiver<Packet>,
-        pdr: f32,
-    ) -> MyDrone {
-        MyDrone {
-            drone_id: id,
-            sim_contr_send: scs,
-            sim_contr_recv: scr,
-            packet_send: ps,
-            packet_recv: pr,
-            pdr: (pdr * 100.0) as u8,
-            floods_tracker: HashMap::new(),
-        }
-    }
-
     fn forward_packet(&mut self, mut packet: Packet) {
-
         //remember to send events to the simulation controller
 
         //remember to send events to the simulation controller
 
         // go to next index
         if packet.routing_header.hop_index == packet.routing_header.hops.len() - 1 {
-            //reached destination, technically this shouldn't be done here but client/server side
+            //reached destination error
+            self.create_nack(
+                Self::error_index(&packet),
+                packet,
+                NackType::DestinationIsDrone,
+            );
             return;
         }
 
@@ -133,39 +117,44 @@ impl MyDrone {
 
             let res = send_channel.send(packet);
 
-            if res.is_err() {
+            if let Err(packet) = res {
                 //means there was an error with the channel (crashed drone), should spawn error
                 self.packet_send.remove(&next_node);
 
-
+                self.create_nack(
+                    Self::error_index(&packet.0),
+                    packet.0,
+                    NackType::DestinationIsDrone,
+                );
             }
-
-            // just testing
         } else {
             //this means the channel isn't connected, should spawn error
+            self.create_nack(
+                Self::error_index(&packet),
+                packet,
+                NackType::DestinationIsDrone,
+            );
         }
     }
 
-    fn handle_msg_fragment(&mut self, index: u64, mut packet: Packet) {
+    fn handle_msg_fragment(&mut self, index: u64, packet: Packet) {
         use rand::Rng;
 
         let prob: u8 = rand::thread_rng().gen_range(0..100);
         if prob < self.pdr {
             //reversing the route up to this point
-            self.create_nack(packet, NackType::Dropped, index);
+            self.create_nack(index, packet, NackType::Dropped);
         } else {
             self.forward_packet(packet);
         }
     }
 
-    fn create_nack(&mut self, mut packet: Packet, nack_type: NackType, index: u64) {
-
-
+    fn create_nack(&mut self, index: u64, mut packet: Packet, nack_type: NackType) {
         //reversing the route up to this point
         packet
-        .routing_header
-        .hops
-        .truncate(packet.routing_header.hop_index + 1);
+            .routing_header
+            .hops
+            .truncate(packet.routing_header.hop_index + 1);
         packet.routing_header.hops.reverse();
         packet.routing_header.hop_index = 1;
 
@@ -174,7 +163,7 @@ impl MyDrone {
         //packet becomes Nack type and gets forwarded
         let nack = Nack {
             fragment_index: index,
-            nack_type
+            nack_type,
         };
 
         packet.pack_type = PacketType::Nack(nack);
@@ -189,6 +178,13 @@ impl MyDrone {
                 // once behaviour is defined it should be something along the lines of "tell the simulation controller"
             }
         }
+    }
 
+    fn error_index(packet: &Packet) -> u64 {
+        let mut index = 0;
+        if let PacketType::MsgFragment(fragment) = &packet.pack_type {
+            index = fragment.fragment_index;
+        }
+        index
     }
 }
