@@ -137,7 +137,7 @@ impl MyDrone {
                 self.create_nack(
                     Self::error_index(&packet.0),
                     packet.0,
-                    NackType::DestinationIsDrone,
+                    NackType::ErrorInRouting(next_node),
                 );
             }
         } else {
@@ -145,7 +145,7 @@ impl MyDrone {
             self.create_nack(
                 Self::error_index(&packet),
                 packet,
-                NackType::DestinationIsDrone,
+                NackType::ErrorInRouting(next_node),
             );
         }
     }
