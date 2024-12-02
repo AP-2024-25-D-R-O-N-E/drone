@@ -76,7 +76,7 @@ impl DroneTrait for MyDrone {
                             PacketType::Nack(_nack)=>self.forward_packet(packet),
                             PacketType::Ack(_ack)=>self.forward_packet(packet),
                             PacketType::MsgFragment(fragment)=>self.handle_msg_fragment(fragment.fragment_index, packet),
-                            PacketType::FloodRequest(flood_request) => self.forward_packet(packet),
+                            PacketType::FloodRequest(flood_request) => self.forward_flood_request(flood_request.clone(), packet ),
                             PacketType::FloodResponse(flood_response) => self.forward_packet(packet),
                         }
 
