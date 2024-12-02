@@ -1,3 +1,6 @@
+use colored::Colorize;
+use log::*;
+
 use std::collections::{HashMap, HashSet};
 
 use crossbeam::{
@@ -51,7 +54,7 @@ impl DroneTrait for MyDrone {
                     // each match branch may call a function to handle it to make it more readable
 
                         //temporary and just for testing
-                        println!("packet received from {}, Packet: {:?}, {:?}", self.drone_id, packet.session_id, packet.pack_type);
+                        log::debug!("{} at {} - packet: {:?}, {:?}", " <- packet received".green(), self.drone_id, packet.session_id, packet.pack_type);
 
                         // error
                         if packet.routing_header.hops[packet.routing_header.hop_index] != self.drone_id {
@@ -111,9 +114,12 @@ impl MyDrone {
         let next_send = self.packet_send.get(&next_node);
 
         if let Some(send_channel) = next_send {
-            println!(
-                "packet sent from {}, Packet: {:?}, {:?}",
-                self.drone_id, packet.session_id, packet.pack_type
+            log::debug!(
+                "{} from {} - packet: {:?}, {:?}",
+                " -> packet sent ".blue(),
+                self.drone_id,
+                packet.session_id,
+                packet.pack_type
             );
 
             let res = send_channel.send(packet);
@@ -189,9 +195,9 @@ impl MyDrone {
             } else {
                 // mark as visited and forward
 
-                println!("Discovered drone {}", self.drone_id);
-                self.floods_tracker
-                    .insert((flood_request.initiator_id, flood_request.flood_id));
+            log::info!("Discovered drone {}", self.drone_id);
+            self.floods_tracker
+                .insert((flood_request.initiator_id, flood_request.flood_id));
 
                 let neighbors: Vec<_> = self.packet_send.keys().cloned().collect(); // should tecnically avoid cloning the crossbeam channel
                 for neighbor_id in neighbors {
