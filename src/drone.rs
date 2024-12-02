@@ -47,6 +47,12 @@ impl DroneTrait for MyDrone {
                 recv(self.sim_contr_recv) -> command_res => {
                     if let Ok(command) = command_res {
                         //handle the simulation controller's command
+                        match command {
+                            DroneCommand::AddSender(id, sender) => self.addsender(id, sender),
+                            DroneCommand::SetPacketDropRate(pdr) => self.set_packet_droprate(pdr as u8),
+                            //DroneCommand::RemoveChannel(id) => self.remove_channel(id),
+                            DroneCommand::Crash => todo!(),
+                        }
                     }
                 },
                 recv(self.packet_recv) -> packet_res => {
@@ -264,4 +270,17 @@ impl MyDrone {
         }
         index
     }
+
+    fn addsender(&mut self, id: NodeId, sender: Sender<Packet>) {
+        self.packet_send.insert(id, sender);
+    }
+
+    fn set_packet_droprate(&mut self, pdr: u8){
+        self.pdr = pdr;
+    }
+
+    fn remove_channel(&mut self, id: NodeId){
+        self.packet_send.remove(&id);
+    }
+
 }
