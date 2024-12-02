@@ -50,7 +50,7 @@ impl DroneTrait for MyDrone {
                     }
                 },
                 recv(self.packet_recv) -> packet_res => {
-                    if let Ok(packet) = packet_res {
+                    if let Ok(mut packet) = packet_res {
                     // each match branch may call a function to handle it to make it more readable
 
                         //temporary and just for testing
@@ -75,12 +75,12 @@ impl DroneTrait for MyDrone {
                         }
 
                         //remember to remove the underscores when you actually start using the variable ig
-                        match &packet.pack_type {
+                        match &mut packet.pack_type {
                             PacketType::Nack(_nack)=>self.forward_packet(packet),
                             PacketType::Ack(_ack)=>self.forward_packet(packet),
                             PacketType::MsgFragment(fragment)=>self.handle_msg_fragment(fragment.fragment_index, packet),
-                            PacketType::FloodRequest(flood_request) => self.forward_packet(packet),
-                            PacketType::FloodResponse(flood_response) => self.forward_packet(packet),
+                            PacketType::FloodRequest(_) => self.forward_flood_request( packet ),
+                            PacketType::FloodResponse(_) => self.forward_packet(packet),
                         }
 
 
@@ -156,69 +156,72 @@ impl MyDrone {
         }
     }
 
-    fn forward_flood_request(&mut self, mut flood_request: FloodRequest, packet: Packet) {
+    fn forward_flood_request(&mut self, mut packet: Packet) {
         // packet: Packet
         // the packet.packet_type was matched for PacketType::Query
         // query: Query
 
         // push node into path_trace, this assures that every edge can be reconstructed by the initiator node
-        flood_request
-            .path_trace
-            .push((self.drone_id, NodeType::Drone));
+        // let mut flood_request: FloodRequest;
+        if let PacketType::FloodRequest(mut flood_request) = packet.pack_type {
+            flood_request
+                .path_trace
+                .push((self.drone_id, NodeType::Drone));
 
-        if self
-            .floods_tracker
-            .contains(&(flood_request.initiator_id, flood_request.flood_id))
-        {
-            //send flood response back, since node is already visited
-            let new_flood_res = FloodResponse {
-                path_trace: flood_request.path_trace.clone(),
-                flood_id: flood_request.flood_id,
-            };
+            if self
+                .floods_tracker
+                .contains(&(flood_request.initiator_id, flood_request.flood_id))
+            {
+                //send flood response back, since node is already visited
+                let new_flood_res = FloodResponse {
+                    path_trace: flood_request.path_trace.clone(),
+                    flood_id: flood_request.flood_id,
+                };
 
-            let mut inverse_route = packet.routing_header.hops.clone();
-            inverse_route.truncate(packet.routing_header.hop_index + 1);
-            inverse_route.reverse();
+                let mut inverse_route = packet.routing_header.hops.clone();
+                inverse_route.truncate(packet.routing_header.hop_index + 1);
+                inverse_route.reverse();
 
-            let packet = Packet {
-                pack_type: PacketType::FloodResponse(new_flood_res),
-                routing_header: SourceRoutingHeader {
-                    hops: inverse_route,
-                    hop_index: 0,
-                },
-                session_id: 0, // it'll be whatever for now
-            };
+                let packet = Packet {
+                    pack_type: PacketType::FloodResponse(new_flood_res),
+                    routing_header: SourceRoutingHeader {
+                        hops: inverse_route,
+                        hop_index: 0,
+                    },
+                    session_id: 0, // it'll be whatever for now
+                };
 
-            self.forward_packet(packet);
-        } else {
-            // mark as visited and forward
+                self.forward_packet(packet);
+            } else {
+                // mark as visited and forward
 
             log::info!("Discovered drone {}", self.drone_id);
             self.floods_tracker
                 .insert((flood_request.initiator_id, flood_request.flood_id));
 
-            let neighbors: Vec<_> = self.packet_send.keys().cloned().collect(); // should tecnically avoid cloning the crossbeam channel
-            for neighbor_id in neighbors {
-                let prev_hop_index = packet.routing_header.hop_index - 1;
-                if neighbor_id != packet.routing_header.hops[prev_hop_index] {
-                    // do not send to the node the request is coming from
-                    let mut route = packet.routing_header.hops.clone();
-                    route.push(neighbor_id);
+                let neighbors: Vec<_> = self.packet_send.keys().cloned().collect(); // should tecnically avoid cloning the crossbeam channel
+                for neighbor_id in neighbors {
+                    let prev_hop_index = packet.routing_header.hop_index - 1;
+                    if neighbor_id != packet.routing_header.hops[prev_hop_index] {
+                        // do not send to the node the request is coming from
+                        let mut route = packet.routing_header.hops.clone();
+                        route.push(neighbor_id);
 
-                    let mut new_flood_req = flood_request.clone();
-                    new_flood_req
-                        .path_trace
-                        .push((neighbor_id, NodeType::Drone));
+                        let mut new_flood_req = flood_request.clone();
+                        new_flood_req
+                            .path_trace
+                            .push((neighbor_id, NodeType::Drone));
 
-                    let packet = Packet {
-                        pack_type: PacketType::FloodRequest(new_flood_req),
-                        routing_header: SourceRoutingHeader {
-                            hops: route,
-                            hop_index: packet.routing_header.hop_index,
-                        },
-                        session_id: 0, // it'll be whatever for now
-                    };
-                    self.forward_packet(packet);
+                        let packet = Packet {
+                            pack_type: PacketType::FloodRequest(new_flood_req),
+                            routing_header: SourceRoutingHeader {
+                                hops: route,
+                                hop_index: packet.routing_header.hop_index,
+                            },
+                            session_id: 0, // it'll be whatever for now
+                        };
+                        self.forward_packet(packet);
+                    }
                 }
             }
         }
