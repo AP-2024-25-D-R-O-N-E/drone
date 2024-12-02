@@ -7,3 +7,5 @@ edition = "2021"
 wg_2024 = { git = "https://github.com/WGL-2024/WGL_repo_2024.git" }
 crossbeam = "0.8.4"
 rand = "0.8"
+log = "0.4.22"
+colored = "2.1.0"
