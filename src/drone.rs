@@ -24,6 +24,7 @@ pub struct MyDrone {
     packet_recv: Receiver<Packet>, //This drone receiver, that will be linked to a sender given to every other drone.
     pdr: f32,                      //Would keep it in % to occupy less space, but could be f32.
     floods_tracker: HashSet<(NodeId, u64)>, //not in the specification yet but will likely be needed to handle the Network Discovery Protocol
+    in_crash_behaviour: bool,
 }
 
 impl DroneTrait for MyDrone {
@@ -43,6 +44,7 @@ impl DroneTrait for MyDrone {
             packet_recv,
             pdr,
             floods_tracker: HashSet::new(),
+            in_crash_behaviour: false,
         }
     }
 
@@ -56,45 +58,55 @@ impl DroneTrait for MyDrone {
                         match command {
                             DroneCommand::AddSender(id,sender)=>self.add_sender(id,sender),
                             DroneCommand::SetPacketDropRate(pdr)=>self.set_packet_droprate(pdr),
-                            DroneCommand::Crash=>todo!(),
-                            DroneCommand::RemoveSender(_) => todo!(), }
+                            DroneCommand::Crash=> {
+                                self.in_crash_behaviour = true;
+                            },
+                            DroneCommand::RemoveSender(id) => self.remove_channel(id), }
                     }
                 },
                 recv(self.packet_recv) -> packet_res => {
-                    if let Ok(mut packet) = packet_res {
-                    // each match branch may call a function to handle it to make it more readable
 
-                        //temporary and just for testing
-                        log::debug!("{} at {} - packet: {:?}, {:?}", " <- packet received".green(), self.drone_id, packet.session_id, packet.pack_type);
+                    match packet_res {
+                        Ok(mut packet) => {
+                            // each match branch may call a function to handle it to make it more readable
 
-                        // error
-                        if packet.routing_header.hops[packet.routing_header.hop_index] != self.drone_id {
-                            // send back Nack with unexpected recipient
+                                //temporary and just for testing
+                                log::debug!("{} at {} - packet: {:?}, {:?}", " <- packet received".green(), self.drone_id, packet.session_id, packet.pack_type);
 
-                            let node_id = packet.routing_header.hops[packet.routing_header.hop_index];
+                                // error
+                                if packet.routing_header.hops[packet.routing_header.hop_index] != self.drone_id {
+                                    // send back Nack with unexpected recipient
 
-                            let mut index = 0;
+                                    let node_id = packet.routing_header.hops[packet.routing_header.hop_index];
 
-                            if let PacketType::MsgFragment(fragment) = &packet.pack_type {
-                                index = fragment.fragment_index;
+                                    let mut index = 0;
+
+                                    if let PacketType::MsgFragment(fragment) = &packet.pack_type {
+                                        index = fragment.fragment_index;
+                                    }
+
+                                    self.create_nack(index, packet, NackType::UnexpectedRecipient(node_id));
+
+                                    //go to next loop
+                                    continue;
+                                }
+
+                                //remember to remove the underscores when you actually start using the variable ig
+                                match &mut packet.pack_type {
+                                    PacketType::Nack(_nack)=>self.forward_packet(packet),
+                                    PacketType::Ack(_ack)=>self.forward_packet(packet),
+                                    PacketType::MsgFragment(fragment)=>self.handle_msg_fragment(fragment.fragment_index, packet),
+                                    PacketType::FloodRequest(_) => self.forward_flood_request( packet ),
+                                    PacketType::FloodResponse(_) => self.forward_packet(packet),
+                                }
+
+                            },
+                        Err(e) => {
+                            // in theory errors only happen when the channel has no open senders
+                            if self.in_crash_behaviour {
+                                return;
                             }
-
-                            self.create_nack(index, packet, NackType::UnexpectedRecipient(node_id));
-
-                            //go to next loop
-                            continue;
-                        }
-
-                        //remember to remove the underscores when you actually start using the variable ig
-                        match &mut packet.pack_type {
-                            PacketType::Nack(_nack)=>self.forward_packet(packet),
-                            PacketType::Ack(_ack)=>self.forward_packet(packet),
-                            PacketType::MsgFragment(fragment)=>self.handle_msg_fragment(fragment.fragment_index, packet),
-                            PacketType::FloodRequest(_) => self.forward_flood_request( packet ),
-                            PacketType::FloodResponse(_) => self.forward_packet(packet),
-                        }
-
-
+                        },
                     }
                 }
             }
@@ -156,6 +168,11 @@ impl MyDrone {
     }
 
     fn handle_msg_fragment(&mut self, index: u64, packet: Packet) {
+        if (self.in_crash_behaviour) {
+            self.create_nack(index, packet, NackType::ErrorInRouting(self.drone_id));
+            return;
+        }
+
         use rand::Rng;
 
         let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
