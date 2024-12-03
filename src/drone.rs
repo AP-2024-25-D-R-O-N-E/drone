@@ -168,13 +168,9 @@ impl MyDrone {
     }
 
     fn forward_flood_request(&mut self, mut packet: Packet) {
-        // packet: Packet
-        // the packet.packet_type was matched for PacketType::Query
-        // query: Query
-
-        // push node into path_trace, this assures that every edge can be reconstructed by the initiator node
         // let mut flood_request: FloodRequest;
         if let PacketType::FloodRequest(mut flood_request) = packet.pack_type {
+            // push node into path_trace, this assures that every edge can be reconstructed by the initiator node
             flood_request
                 .path_trace
                 .push((self.drone_id, NodeType::Drone));
@@ -185,11 +181,11 @@ impl MyDrone {
             {
                 //send flood response back, since node is already visited
                 let new_flood_res = FloodResponse {
-                    path_trace: flood_request.path_trace.clone(),
+                    path_trace: flood_request.path_trace,
                     flood_id: flood_request.flood_id,
                 };
 
-                let mut inverse_route = packet.routing_header.hops.clone();
+                let mut inverse_route = packet.routing_header.hops;
                 inverse_route.truncate(packet.routing_header.hop_index + 1);
                 inverse_route.reverse();
 
