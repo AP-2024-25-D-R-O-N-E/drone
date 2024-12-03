@@ -214,13 +214,8 @@ impl MyDrone {
                         let mut route = packet.routing_header.hops.clone();
                         route.push(neighbor_id);
 
-                        let mut new_flood_req = flood_request.clone();
-                        new_flood_req
-                            .path_trace
-                            .push((neighbor_id, NodeType::Drone));
-
                         let packet = Packet {
-                            pack_type: PacketType::FloodRequest(new_flood_req),
+                            pack_type: PacketType::FloodRequest(flood_request.clone()),
                             routing_header: SourceRoutingHeader {
                                 hops: route,
                                 hop_index: packet.routing_header.hop_index,
