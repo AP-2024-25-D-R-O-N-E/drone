@@ -9,33 +9,39 @@ use crossbeam::{
 };
 use rand::seq::index;
 use wg_2024::{
-    controller::{DroneCommand, NodeEvent},
-    drone::DroneOptions,
+    controller::{DroneCommand, DroneEvent},
     network::{NodeId, SourceRoutingHeader},
-    packet::{FloodRequest, FloodResponse, Nack, NackType, NodeType, Packet},
+    packet::{FloodResponse, Nack, NackType, NodeType, Packet},
 };
 use wg_2024::{drone::Drone as DroneTrait, packet::PacketType};
 
 #[derive(Debug)]
 pub struct MyDrone {
     drone_id: NodeId,
-    sim_contr_send: Sender<NodeEvent>,            //Not packet.
+    sim_contr_send: Sender<DroneEvent>,           //Not packet.
     sim_contr_recv: Receiver<DroneCommand>,       //Not packet.
     packet_send: HashMap<NodeId, Sender<Packet>>, //All the sender to other nodes.
     packet_recv: Receiver<Packet>, //This drone receiver, that will be linked to a sender given to every other drone.
-    pdr: u8,                       //Would keep it in % to occupy less space, but could be f32.
+    pdr: f32,                      //Would keep it in % to occupy less space, but could be f32.
     floods_tracker: HashSet<(NodeId, u64)>, //not in the specification yet but will likely be needed to handle the Network Discovery Protocol
 }
 
 impl DroneTrait for MyDrone {
-    fn new(options: DroneOptions) -> Self {
+    fn new(
+        id: NodeId,
+        controller_send: Sender<DroneEvent>,
+        controller_recv: Receiver<DroneCommand>,
+        packet_recv: Receiver<Packet>,
+        packet_send: HashMap<NodeId, Sender<Packet>>,
+        pdr: f32,
+    ) -> Self {
         MyDrone {
-            drone_id: options.id,
-            sim_contr_send: options.controller_send,
-            sim_contr_recv: options.controller_recv,
-            packet_send: options.packet_send,
-            packet_recv: options.packet_recv,
-            pdr: (options.pdr * 100.0) as u8,
+            drone_id: id,
+            sim_contr_send: controller_send,
+            sim_contr_recv: controller_recv,
+            packet_send,
+            packet_recv,
+            pdr,
             floods_tracker: HashSet::new(),
         }
     }
@@ -48,11 +54,10 @@ impl DroneTrait for MyDrone {
                     if let Ok(command) = command_res {
                         //handle the simulation controller's command
                         match command {
-                            DroneCommand::AddSender(id, sender) => self.addsender(id, sender),
-                            DroneCommand::SetPacketDropRate(pdr) => self.set_packet_droprate(pdr as u8),
-                            //DroneCommand::RemoveChannel(id) => self.remove_channel(id),
-                            DroneCommand::Crash => todo!(),
-                        }
+                            DroneCommand::AddSender(id,sender)=>self.add_sender(id,sender),
+                            DroneCommand::SetPacketDropRate(pdr)=>self.set_packet_droprate(pdr),
+                            DroneCommand::Crash=>todo!(),
+                            DroneCommand::RemoveSender(_) => todo!(), }
                     }
                 },
                 recv(self.packet_recv) -> packet_res => {
@@ -153,8 +158,8 @@ impl MyDrone {
     fn handle_msg_fragment(&mut self, index: u64, packet: Packet) {
         use rand::Rng;
 
-        let prob: u8 = rand::thread_rng().gen_range(0..100);
-        if prob < self.pdr {
+        let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
+        if prob <= self.pdr {
             //reversing the route up to this point
             self.create_nack(index, packet, NackType::Dropped);
         } else {
@@ -201,9 +206,9 @@ impl MyDrone {
             } else {
                 // mark as visited and forward
 
-            log::info!("Discovered drone {}", self.drone_id);
-            self.floods_tracker
-                .insert((flood_request.initiator_id, flood_request.flood_id));
+                log::info!("Discovered drone {}", self.drone_id);
+                self.floods_tracker
+                    .insert((flood_request.initiator_id, flood_request.flood_id));
 
                 let neighbors: Vec<_> = self.packet_send.keys().cloned().collect(); // should tecnically avoid cloning the crossbeam channel
                 for neighbor_id in neighbors {
@@ -271,16 +276,15 @@ impl MyDrone {
         index
     }
 
-    fn addsender(&mut self, id: NodeId, sender: Sender<Packet>) {
+    fn add_sender(&mut self, id: NodeId, sender: Sender<Packet>) {
         self.packet_send.insert(id, sender);
     }
 
-    fn set_packet_droprate(&mut self, pdr: u8){
+    fn set_packet_droprate(&mut self, pdr: f32) {
         self.pdr = pdr;
     }
 
-    fn remove_channel(&mut self, id: NodeId){
+    fn remove_channel(&mut self, id: NodeId) {
         self.packet_send.remove(&id);
     }
-
 }
