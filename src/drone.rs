@@ -73,45 +73,46 @@ impl DroneTrait for MyDrone {
                                 //temporary and just for testing
                                 log::debug!("{} at {} - packet: {:?}, {:?}", " <- packet received".green(), self.drone_id, packet.session_id, packet.pack_type);
 
-                                // if there's an error, create a nack
-                                if let Err(nack_type) = self.check_handling_errors(&packet) {
+                                // flood_request works very differently from the other types as it's a broadcast, as such it's handled on its own
+                                if let PacketType::FloodRequest(request) = &packet.pack_type {
+                                    // only requirement for flood_request is that the destination not be a weird
+                                    if let Err(nack_type) = self.check_recipient(&packet) {
+                                        // if there's an issue with the flood request formatting, create and send back a nack
+                                        self.create_nack(0, &mut packet, nack_type);
+                                        self.forward_packet(packet);
+                                    } else {
+                                        // if there's no recipient error, handle flood_requests normally
+                                        self.forward_flood_request(packet);
+                                    }
+                                } else {
+                                    // handle packets that aren't flood requests
 
-                                    // if the error occurs on Ack, Nack or FloodResponse, we send it back through the simulation controller
-                                    match &packet.pack_type {
-                                        PacketType::Ack(_) | 
-                                        PacketType::Nack(_) |
-                                        PacketType::FloodResponse(_) => {
-                                            self.sim_contr_send.send(DroneEvent::ControllerShortcut(packet));
-                                            // we don't want to forward any packet in this case since we used the shortcut, so we continue to the next recv
-                                            continue;
-                                        },
-                                        PacketType::MsgFragment(fragment) => {
-                                            // if the packet is a msgfragment, then create an appropriate nack
-                                            self.create_nack(fragment.fragment_index, &mut packet, nack_type);
-                                        },
-                                        PacketType::FloodRequest(_) => {
-                                            // flood request can be dropped if an error occurred
-                                            continue;
+                                    // if there's an error, create a nack
+                                    if let Err(nack_type) = self.check_handling_errors(&packet) {
+
+                                        // if the error occurs on Ack, Nack or FloodResponse, we send it back through the simulation controller
+                                        match &packet.pack_type {
+                                            PacketType::Ack(_) |
+                                            PacketType::Nack(_) |
+                                            PacketType::FloodResponse(_) => {
+                                                self.sim_contr_send.send(DroneEvent::ControllerShortcut(packet));
+                                                // we don't want to forward any packet in this case since we used the shortcut, so we continue to the next recv
+                                                continue;
+                                            },
+                                            PacketType::MsgFragment(fragment) => {
+                                                // if the packet is a msgfragment, then create an appropriate nack
+                                                self.create_nack(fragment.fragment_index, &mut packet, nack_type);
+                                            },
+                                            _ => {
+                                                // flood requests shouldn't reach here
+                                                continue;
+                                            }
                                         }
                                     }
 
-                                }
-
-                                // for all types except for flood_request, you simply forward the packet forward
-                                if let PacketType::FloodRequest(request) = &packet.pack_type {
-                                    self.forward_flood_request(packet);
-                                } else {
                                     self.forward_packet(packet);
-                                }
 
-                                //remember to remove the underscores when you actually start using the variable ig
-                                // match &mut packet.pack_type {
-                                //     PacketType::Nack(_nack)=>self.forward_packet(packet),
-                                //     PacketType::Ack(_ack)=>self.forward_packet(packet),
-                                //     PacketType::MsgFragment(fragment)=>self.handle_msg_fragment(fragment.fragment_index, packet),
-                                //     PacketType::FloodRequest(_) => self.forward_flood_request( packet ),
-                                //     PacketType::FloodResponse(_) => self.forward_packet(packet),
-                                // }
+                                }
 
                             },
                         Err(e) => {
@@ -128,8 +129,7 @@ impl DroneTrait for MyDrone {
 }
 
 impl MyDrone {
-
-    fn check_handling_errors (&mut self, packet: &Packet) -> Result<(), (NackType)> {
+    fn check_handling_errors(&mut self, packet: &Packet) -> Result<(), (NackType)> {
         // checks if this drone is the recipient
         self.check_recipient(packet)?;
 
@@ -147,7 +147,7 @@ impl MyDrone {
         Ok(())
     }
 
-    fn check_recipient(&self, packet: &Packet) -> Result<(), (NackType)>{
+    fn check_recipient(&self, packet: &Packet) -> Result<(), (NackType)> {
         // check if the recipient of the packet is correct
         let node_id = packet.routing_header.hops[packet.routing_header.hop_index];
 
@@ -160,7 +160,7 @@ impl MyDrone {
 
     fn check_final_dest(&self, packet: &Packet) -> Result<(), (NackType)> {
         // if the hop_index is the last of the hops vector, then the destination is a drone, which isn't allowed
-        if packet.routing_header.hops.len() -1 == packet.routing_header.hop_index {
+        if packet.routing_header.hops.len() - 1 == packet.routing_header.hop_index {
             Err(NackType::DestinationIsDrone)
         } else {
             Ok(())
@@ -168,7 +168,6 @@ impl MyDrone {
     }
 
     fn check_neighbor_recipient(&self, packet: &Packet) -> Result<(), (NackType)> {
-
         // since this check is done after check_final_dest, we know that hop_index isn't the last item of the vector
         let node_id = packet.routing_header.hops[packet.routing_header.hop_index + 1];
 
@@ -181,23 +180,20 @@ impl MyDrone {
     }
 
     fn check_fragment_drop(&self, packet: &Packet) -> Result<(), (NackType)> {
-
         use rand::Rng;
 
         let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
         if prob <= self.pdr {
             // if the packet gets dropped, send an event to the simulation controller
-            self.sim_contr_send.send(DroneEvent::PacketDropped(packet.clone()));
+            self.sim_contr_send
+                .send(DroneEvent::PacketDropped(packet.clone()));
             Err(NackType::Dropped)
         } else {
             Ok(())
         }
-
     }
 
-
     fn forward_packet(&mut self, mut packet: Packet) {
-
         packet.routing_header.hop_index += 1;
         let next_node = packet.routing_header.hops[packet.routing_header.hop_index];
 
@@ -218,25 +214,7 @@ impl MyDrone {
         } else {
             self.sim_contr_send.send(DroneEvent::PacketSent(packet));
         }
-        
     }
-
-    // fn handle_msg_fragment(&mut self, index: u64, packet: Packet) {
-    //     if (self.in_crash_behaviour) {
-    //         self.create_nack(index, packet, NackType::ErrorInRouting(self.drone_id));
-    //         return;
-    //     }
-
-    //     use rand::Rng;
-
-    //     let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
-    //     if prob <= self.pdr {
-    //         //reversing the route up to this point
-    //         self.create_nack(index, packet, NackType::Dropped);
-    //     } else {
-    //         self.forward_packet(packet);
-    //     }
-    // }
 
     fn forward_flood_request(&mut self, mut packet: Packet) {
         // let mut flood_request: FloodRequest;
@@ -309,7 +287,11 @@ impl MyDrone {
         packet.routing_header.hops.reverse();
         packet.routing_header.hop_index = 0;
 
-        log::debug!("drone {} creating nack with routing {:?}",self.drone_id, packet.routing_header);
+        log::debug!(
+            "drone {} creating nack with routing {:?}",
+            self.drone_id,
+            packet.routing_header
+        );
 
         //packet becomes Nack type and gets forwarded
         let nack = Nack {
@@ -318,14 +300,6 @@ impl MyDrone {
         };
 
         packet.pack_type = PacketType::Nack(nack);
-    }
-
-    fn error_index(packet: &Packet) -> u64 {
-        let mut index = 0;
-        if let PacketType::MsgFragment(fragment) = &packet.pack_type {
-            index = fragment.fragment_index;
-        }
-        index
     }
 
     fn add_sender(&mut self, id: NodeId, sender: Sender<Packet>) {
@@ -339,10 +313,4 @@ impl MyDrone {
     fn remove_channel(&mut self, id: NodeId) {
         self.packet_send.remove(&id);
     }
-}
-
-
-#[test]
-fn test() {
-
 }
