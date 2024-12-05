@@ -73,32 +73,45 @@ impl DroneTrait for MyDrone {
                                 //temporary and just for testing
                                 log::debug!("{} at {} - packet: {:?}, {:?}", " <- packet received".green(), self.drone_id, packet.session_id, packet.pack_type);
 
-                                // error
-                                if packet.routing_header.hops[packet.routing_header.hop_index] != self.drone_id {
-                                    // send back Nack with unexpected recipient
+                                // if there's an error, create a nack
+                                if let Err(nack_type) = self.check_handling_errors(&packet) {
 
-                                    let node_id = packet.routing_header.hops[packet.routing_header.hop_index];
-
-                                    let mut index = 0;
-
-                                    if let PacketType::MsgFragment(fragment) = &packet.pack_type {
-                                        index = fragment.fragment_index;
+                                    // if the error occurs on Ack, Nack or FloodResponse, we send it back through the simulation controller
+                                    match &packet.pack_type {
+                                        PacketType::Ack(_) | 
+                                        PacketType::Nack(_) |
+                                        PacketType::FloodResponse(_) => {
+                                            self.sim_contr_send.send(DroneEvent::ControllerShortcut(packet));
+                                            // we don't want to forward any packet in this case since we used the shortcut, so we continue to the next recv
+                                            continue;
+                                        },
+                                        PacketType::MsgFragment(fragment) => {
+                                            // if the packet is a msgfragment, then create an appropriate nack
+                                            self.create_nack(fragment.fragment_index, &mut packet, nack_type);
+                                        },
+                                        PacketType::FloodRequest(_) => {
+                                            // flood request can be dropped if an error occurred
+                                            continue;
+                                        }
                                     }
 
-                                    self.create_nack(index, packet, NackType::UnexpectedRecipient(node_id));
+                                }
 
-                                    //go to next loop
-                                    continue;
+                                // for all types except for flood_request, you simply forward the packet forward
+                                if let PacketType::FloodRequest(request) = &packet.pack_type {
+                                    self.forward_flood_request(packet);
+                                } else {
+                                    self.forward_packet(packet);
                                 }
 
                                 //remember to remove the underscores when you actually start using the variable ig
-                                match &mut packet.pack_type {
-                                    PacketType::Nack(_nack)=>self.forward_packet(packet),
-                                    PacketType::Ack(_ack)=>self.forward_packet(packet),
-                                    PacketType::MsgFragment(fragment)=>self.handle_msg_fragment(fragment.fragment_index, packet),
-                                    PacketType::FloodRequest(_) => self.forward_flood_request( packet ),
-                                    PacketType::FloodResponse(_) => self.forward_packet(packet),
-                                }
+                                // match &mut packet.pack_type {
+                                //     PacketType::Nack(_nack)=>self.forward_packet(packet),
+                                //     PacketType::Ack(_ack)=>self.forward_packet(packet),
+                                //     PacketType::MsgFragment(fragment)=>self.handle_msg_fragment(fragment.fragment_index, packet),
+                                //     PacketType::FloodRequest(_) => self.forward_flood_request( packet ),
+                                //     PacketType::FloodResponse(_) => self.forward_packet(packet),
+                                // }
 
                             },
                         Err(e) => {
@@ -115,76 +128,115 @@ impl DroneTrait for MyDrone {
 }
 
 impl MyDrone {
-    fn forward_packet(&mut self, mut packet: Packet) {
-        //remember to send events to the simulation controller
 
-        //remember to send events to the simulation controller
+    fn check_handling_errors (&mut self, packet: &Packet) -> Result<(), (NackType)> {
+        // checks if this drone is the recipient
+        self.check_recipient(packet)?;
 
-        // go to next index
-        if packet.routing_header.hop_index == packet.routing_header.hops.len() - 1 {
-            //reached destination error
-            self.create_nack(
-                Self::error_index(&packet),
-                packet,
-                NackType::DestinationIsDrone,
-            );
-            return;
+        // checks if drone is the final destination of the packet
+        self.check_final_dest(packet)?;
+
+        // checks if the next packet is reachable from here
+        self.check_neighbor_recipient(packet)?;
+
+        // if the packet is a fragment, calculate the drop rate
+        if let PacketType::MsgFragment(fragment) = &packet.pack_type {
+            self.check_fragment_drop(packet)?;
         }
 
-        packet.routing_header.hop_index += 1;
-        let next_node = packet.routing_header.hops[packet.routing_header.hop_index];
+        Ok(())
+    }
 
-        let next_send = self.packet_send.get(&next_node);
+    fn check_recipient(&self, packet: &Packet) -> Result<(), (NackType)>{
+        // check if the recipient of the packet is correct
+        let node_id = packet.routing_header.hops[packet.routing_header.hop_index];
 
-        if let Some(send_channel) = next_send {
-            log::debug!(
-                "{} from {} - packet: {:?}, {:?}",
-                " -> packet sent ".blue(),
-                self.drone_id,
-                packet.session_id,
-                packet.pack_type
-            );
-
-            let res = send_channel.send(packet);
-
-            if let Err(mut packet) = res {
-                //means there was an error with the channel (crashed drone), should spawn error
-                self.packet_send.remove(&next_node);
-
-                packet.0.routing_header.hop_index -= 1; // to have consistent create_nack behaviour
-                self.create_nack(
-                    Self::error_index(&packet.0),
-                    packet.0,
-                    NackType::ErrorInRouting(next_node),
-                );
-            }
+        if node_id != self.drone_id {
+            Err(NackType::UnexpectedRecipient(node_id))
         } else {
-            //this means the channel isn't connected, should spawn error
-            packet.routing_header.hop_index -= 1; // to have consistent create_nack behaviour
-            self.create_nack(
-                Self::error_index(&packet),
-                packet,
-                NackType::ErrorInRouting(next_node),
-            );
+            Ok(())
         }
     }
 
-    fn handle_msg_fragment(&mut self, index: u64, packet: Packet) {
-        if (self.in_crash_behaviour) {
-            self.create_nack(index, packet, NackType::ErrorInRouting(self.drone_id));
-            return;
+    fn check_final_dest(&self, packet: &Packet) -> Result<(), (NackType)> {
+        // if the hop_index is the last of the hops vector, then the destination is a drone, which isn't allowed
+        if packet.routing_header.hops.len() -1 == packet.routing_header.hop_index {
+            Err(NackType::DestinationIsDrone)
+        } else {
+            Ok(())
         }
+    }
+
+    fn check_neighbor_recipient(&self, packet: &Packet) -> Result<(), (NackType)> {
+
+        // since this check is done after check_final_dest, we know that hop_index isn't the last item of the vector
+        let node_id = packet.routing_header.hops[packet.routing_header.hop_index + 1];
+
+        // we assume that packet_send containing the hashmap ensures the fact that the sender channel will work
+        if self.packet_send.contains_key(&node_id) {
+            Ok(())
+        } else {
+            Err(NackType::ErrorInRouting(node_id))
+        }
+    }
+
+    fn check_fragment_drop(&self, packet: &Packet) -> Result<(), (NackType)> {
 
         use rand::Rng;
 
         let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
         if prob <= self.pdr {
-            //reversing the route up to this point
-            self.create_nack(index, packet, NackType::Dropped);
+            // if the packet gets dropped, send an event to the simulation controller
+            self.sim_contr_send.send(DroneEvent::PacketDropped(packet.clone()));
+            Err(NackType::Dropped)
         } else {
-            self.forward_packet(packet);
+            Ok(())
         }
+
     }
+
+
+    fn forward_packet(&mut self, mut packet: Packet) {
+
+        packet.routing_header.hop_index += 1;
+        let next_node = packet.routing_header.hops[packet.routing_header.hop_index];
+
+        let send_channel = &self.packet_send[&next_node];
+
+        log::debug!(
+            "{} from {} - packet: {:?}, {:?}",
+            " -> packet sent ".blue(),
+            self.drone_id,
+            packet.session_id,
+            packet.pack_type
+        );
+
+        let res = send_channel.send(packet.clone());
+
+        if let Err(mut packet) = res {
+            log::error!("The send inside channel gave an error, this shouldn't be happening");
+        } else {
+            self.sim_contr_send.send(DroneEvent::PacketSent(packet));
+        }
+        
+    }
+
+    // fn handle_msg_fragment(&mut self, index: u64, packet: Packet) {
+    //     if (self.in_crash_behaviour) {
+    //         self.create_nack(index, packet, NackType::ErrorInRouting(self.drone_id));
+    //         return;
+    //     }
+
+    //     use rand::Rng;
+
+    //     let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
+    //     if prob <= self.pdr {
+    //         //reversing the route up to this point
+    //         self.create_nack(index, packet, NackType::Dropped);
+    //     } else {
+    //         self.forward_packet(packet);
+    //     }
+    // }
 
     fn forward_flood_request(&mut self, mut packet: Packet) {
         // let mut flood_request: FloodRequest;
@@ -247,18 +299,17 @@ impl MyDrone {
             }
         }
     }
-    fn create_nack(&self, index: u64, mut packet: Packet, nack_type: NackType) {
+    fn create_nack(&self, index: u64, packet: &mut Packet, nack_type: NackType) {
         //reversing the route up to this point
+
         packet
             .routing_header
             .hops
             .truncate(packet.routing_header.hop_index + 1);
         packet.routing_header.hops.reverse();
-        packet.routing_header.hop_index = 1;
+        packet.routing_header.hop_index = 0;
 
         log::debug!("drone {} creating nack with routing {:?}",self.drone_id, packet.routing_header);
-
-        // might need to do tests here too?
 
         //packet becomes Nack type and gets forwarded
         let nack = Nack {
@@ -267,20 +318,6 @@ impl MyDrone {
         };
 
         packet.pack_type = PacketType::Nack(nack);
-
-        let next_send = self.packet_send.get(&packet.routing_header.hops[1]);
-
-        if let Some(channel) = next_send {
-            let res = channel.send(packet);
-
-            if res.is_err() {
-
-                log::debug!("opsie I fucked up");
-
-                //means that the message got "trapped"
-                // once behaviour is defined it should be something along the lines of "tell the simulation controller"
-            }
-        }
     }
 
     fn error_index(packet: &Packet) -> u64 {
@@ -302,4 +339,10 @@ impl MyDrone {
     fn remove_channel(&mut self, id: NodeId) {
         self.packet_send.remove(&id);
     }
+}
+
+
+#[test]
+fn test() {
+
 }
