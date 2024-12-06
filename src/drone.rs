@@ -71,7 +71,7 @@ impl DroneTrait for MyDrone {
                             // each match branch may call a function to handle it to make it more readable
 
                                 //temporary and just for testing
-                                log::debug!("{} at {} - packet: {:?}, {:?}", " <- packet received".green(), self.drone_id, packet.session_id, packet.pack_type);
+                                log::debug!("{} at {} - packet: {}", " <- packet received".green(), self.drone_id, packet);
 
                                 // flood_request works very differently from the other types as it's a broadcast, as such it's handled on its own
                                 if let PacketType::FloodRequest(request) = &packet.pack_type {
@@ -200,11 +200,10 @@ impl MyDrone {
         let send_channel = &self.packet_send[&next_node];
 
         log::debug!(
-            "{} from {} - packet: {:?}, {:?}",
+            "{} from {} - packet: {}",
             " -> packet sent ".blue(),
             self.drone_id,
-            packet.session_id,
-            packet.pack_type
+            packet
         );
 
         let res = send_channel.send(packet.clone());
@@ -224,9 +223,9 @@ impl MyDrone {
                 .path_trace
                 .push((self.drone_id, NodeType::Drone));
 
-            if self
-                .floods_tracker
-                .contains(&(flood_request.initiator_id, flood_request.flood_id))
+                //insert returns whether the element was already present in the set
+            if !self.floods_tracker
+                .insert((flood_request.initiator_id, flood_request.flood_id)) || self.packet_send.len() == 1
             {
                 //send flood response back, since node is already visited
                 let new_flood_res = FloodResponse {
@@ -287,12 +286,6 @@ impl MyDrone {
         packet.routing_header.hops.reverse();
         packet.routing_header.hop_index = 0;
 
-        log::debug!(
-            "drone {} creating nack with routing {:?}",
-            self.drone_id,
-            packet.routing_header
-        );
-
         //packet becomes Nack type and gets forwarded
         let nack = Nack {
             fragment_index: index,
@@ -313,4 +306,9 @@ impl MyDrone {
     fn remove_channel(&mut self, id: NodeId) {
         self.packet_send.remove(&id);
     }
+}
+
+#[test]
+fn test() {
+
 }
