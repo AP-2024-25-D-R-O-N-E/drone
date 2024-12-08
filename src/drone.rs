@@ -75,15 +75,8 @@ impl DroneTrait for MyDrone {
 
                                 // flood_request works very differently from the other types as it's a broadcast, as such it's handled on its own
                                 if let PacketType::FloodRequest(request) = &packet.pack_type {
-                                    // only requirement for flood_request is that the destination not be a weird
-                                    if let Err(nack_type) = self.check_recipient(&packet) {
-                                        // if there's an issue with the flood request formatting, create and send back a nack
-                                        self.create_nack(0, &mut packet, nack_type);
-                                        self.forward_packet(packet);
-                                    } else {
                                         // if there's no recipient error, handle flood_requests normally
                                         self.forward_flood_request(packet);
-                                    }
                                 } else {
                                     // handle packets that aren't flood requests
 
