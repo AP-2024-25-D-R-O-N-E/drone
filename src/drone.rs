@@ -180,6 +180,11 @@ impl MyDrone {
     }
 
     fn check_fragment_drop(&self, packet: &Packet) -> Result<(), (NackType)> {
+        if self.in_crash_behaviour {
+            return Err(NackType::ErrorInRouting(self.drone_id));
+        }
+
+
         use rand::Rng;
 
         let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
