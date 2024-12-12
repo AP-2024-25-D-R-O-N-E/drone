@@ -195,6 +195,7 @@ impl MyDrone {
         packet.routing_header.hop_index += 1;
         let next_node = packet.routing_header.hops[packet.routing_header.hop_index];
 
+        // finds the channel corresponding to the next node without any checks, since they were done previously
         let send_channel = &self.packet_send[&next_node];
 
         log::debug!(
@@ -214,7 +215,7 @@ impl MyDrone {
     }
 
     fn forward_flood_request(&mut self, mut packet: Packet) {
-        // let mut flood_request: FloodRequest;
+
         if let PacketType::FloodRequest(mut flood_request) = packet.pack_type {
             // push node into path_trace, this assures that every edge can be reconstructed by the initiator node
             flood_request
@@ -231,8 +232,9 @@ impl MyDrone {
                     flood_id: flood_request.flood_id,
                 };
 
-                let mut inverse_route = packet.routing_header.hops;
-                inverse_route.truncate(packet.routing_header.hop_index + 1);
+                // creates inverted route starting from path_trace
+                let mut inverse_route: Vec<NodeId> = new_flood_res.path_trace.iter().map(|(id, _)| *id).collect();
+                // ignore the rare occurrances where a loop might be created as its not computationally viable to consider it
                 inverse_route.reverse();
 
                 let packet = Packet {
@@ -254,21 +256,28 @@ impl MyDrone {
 
                 let neighbors: Vec<_> = self.packet_send.keys().cloned().collect(); // should tecnically avoid cloning the crossbeam channel
                 for neighbor_id in neighbors {
-                    let prev_hop_index = packet.routing_header.hop_index - 1;
-                    if neighbor_id != packet.routing_header.hops[prev_hop_index] {
-                        // do not send to the node the request is coming from
-                        let mut route = packet.routing_header.hops.clone();
-                        route.push(neighbor_id);
+                    // take the last 
+                    let prev_neighbor = flood_request.path_trace.get(flood_request.path_trace.len() - 1);
 
-                        let packet = Packet {
-                            pack_type: PacketType::FloodRequest(flood_request.clone()),
-                            routing_header: SourceRoutingHeader {
-                                hops: route,
-                                hop_index: packet.routing_header.hop_index,
-                            },
-                            session_id: 0, // it'll be whatever for now
-                        };
-                        self.forward_packet(packet);
+                    // since flooding is a no guarantee "protocol" (like UDP), the drone shouldn't crash if a badly formed request is created
+                    if let Some((previous_neighbor, _)) = prev_neighbor {
+                        if neighbor_id != *previous_neighbor {
+                            // do not send to the node the request is coming from
+                            let mut route = packet.routing_header.hops.clone();
+                            route.push(neighbor_id);
+    
+                            let packet = Packet {
+                                pack_type: PacketType::FloodRequest(flood_request.clone()),
+                                routing_header: SourceRoutingHeader {
+                                    hops: route,
+                                    hop_index: packet.routing_header.hop_index,
+                                },
+                                session_id: 0, // it'll be whatever for now
+                            };
+                            self.forward_packet(packet);
+                        }
+                    } else {
+                        log::error!("The path_trace was missing an element");
                     }
                 }
             }
