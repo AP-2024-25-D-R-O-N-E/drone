@@ -263,18 +263,16 @@ impl MyDrone {
                     if let Some((previous_neighbor, _)) = prev_neighbor {
                         if neighbor_id != *previous_neighbor {
                             // do not send to the node the request is coming from
-                            let mut route = packet.routing_header.hops.clone();
-                            route.push(neighbor_id);
     
                             let packet = Packet {
                                 pack_type: PacketType::FloodRequest(flood_request.clone()),
                                 routing_header: SourceRoutingHeader {
-                                    hops: route,
-                                    hop_index: packet.routing_header.hop_index,
+                                    hops: vec![],
+                                    hop_index: 0,
                                 },
                                 session_id: 0, // it'll be whatever for now
                             };
-                            self.forward_packet(packet);
+                            self.forward_routingless_packet(packet, neighbor_id);
                         }
                     } else {
                         log::error!("The path_trace was missing an element");
@@ -283,6 +281,31 @@ impl MyDrone {
             }
         }
     }
+
+    fn forward_routingless_packet(&self, mut packet: Packet, destination: NodeId) {
+        // finds the channel corresponding to the next node without any checks, since they were done previously
+        let send_channel = &self.packet_send.get(&destination);
+
+        if let Some(ref sender) = send_channel {
+            log::debug!(
+                "{} from {} - packet: {}",
+                " -> packet sent ".blue(),
+                self.drone_id,
+                packet
+            );
+    
+            let res = sender.send(packet.clone());
+    
+            if let Err(mut packet) = res {
+                log::error!("The send inside channel gave an error, this shouldn't be happening");
+            } else {
+                self.sim_contr_send.send(DroneEvent::PacketSent(packet));
+            }
+        } else {
+            log::error!("This neighbor doesn't exist, this error shouldn't occur");
+        }
+    }
+
     fn create_nack(&self, index: u64, packet: &mut Packet, nack_type: NackType) {
         //reversing the route up to this point
 
