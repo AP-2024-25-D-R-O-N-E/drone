@@ -256,8 +256,8 @@ impl MyDrone {
 
                 let neighbors: Vec<_> = self.packet_send.keys().cloned().collect(); // should tecnically avoid cloning the crossbeam channel
                 for neighbor_id in neighbors {
-                    // take the last 
-                    let prev_neighbor = flood_request.path_trace.get(flood_request.path_trace.len() - 1);
+                    // take the second to last, as the last one is the one we just added
+                    let prev_neighbor = flood_request.path_trace.get(flood_request.path_trace.len() - 2);
 
                     // since flooding is a no guarantee "protocol" (like UDP), the drone shouldn't crash if a badly formed request is created
                     if let Some((previous_neighbor, _)) = prev_neighbor {
@@ -275,7 +275,7 @@ impl MyDrone {
                             self.forward_routingless_packet(packet, neighbor_id);
                         }
                     } else {
-                        log::error!("The path_trace was missing an element");
+                        log::error!("The path_trace was missing an element: {:?}", flood_request.path_trace);
                     }
                 }
             }
