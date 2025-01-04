@@ -11,7 +11,7 @@ use rand::seq::index;
 use wg_2024::{
     controller::{DroneCommand, DroneEvent},
     network::{NodeId, SourceRoutingHeader},
-    packet::{FloodResponse, Nack, NackType, NodeType, Packet},
+    packet::{self, FloodResponse, Nack, NackType, NodeType, Packet},
 };
 use wg_2024::{drone::Drone as DroneTrait, packet::PacketType};
 
@@ -49,79 +49,80 @@ impl DroneTrait for MyDrone {
     }
 
     fn run(&mut self) {
-        loop {
+        while !self.in_crash_behaviour {
             select_biased! {
-                //give priority to commands
-                recv(self.sim_contr_recv) -> command_res => {
-                    if let Ok(command) = command_res {
-                        //handle the simulation controller's command
-                        match command {
-                            DroneCommand::AddSender(id,sender)=>self.add_sender(id,sender),
-                            DroneCommand::SetPacketDropRate(pdr)=>self.set_packet_droprate(pdr),
-                            DroneCommand::Crash=> {
-                                self.in_crash_behaviour = true;
-                            },
-                            DroneCommand::RemoveSender(id) => self.remove_channel(id), }
-                    }
-                },
-                recv(self.packet_recv) -> packet_res => {
-
-                    match packet_res {
-                        Ok(mut packet) => {
-                            // each match branch may call a function to handle it to make it more readable
-
-                                //temporary and just for testing
-                                log::debug!("{} at {} - packet: {}", " <- packet received".green(), self.drone_id, packet);
-
-                                // flood_request works very differently from the other types as it's a broadcast, as such it's handled on its own
-                                if let PacketType::FloodRequest(request) = &packet.pack_type {
-                                        // if there's no recipient error, handle flood_requests normally
-                                        self.forward_flood_request(packet);
-                                } else {
-                                    // handle packets that aren't flood requests
-
-                                    // if there's an error, create a nack
-                                    if let Err(nack_type) = self.check_handling_errors(&packet) {
-
-                                        // if the error occurs on Ack, Nack or FloodResponse, we send it back through the simulation controller
-                                        match &packet.pack_type {
-                                            PacketType::Ack(_) |
-                                            PacketType::Nack(_) |
-                                            PacketType::FloodResponse(_) => {
-                                                self.sim_contr_send.send(DroneEvent::ControllerShortcut(packet));
-                                                // we don't want to forward any packet in this case since we used the shortcut, so we continue to the next recv
-                                                continue;
-                                            },
-                                            PacketType::MsgFragment(fragment) => {
-                                                // if the packet is a msgfragment, then create an appropriate nack
-                                                self.create_nack(fragment.fragment_index, &mut packet, nack_type);
-                                            },
-                                            _ => {
-                                                // flood requests shouldn't reach here
-                                                continue;
-                                            }
-                                        }
-                                    }
-
-                                    self.forward_packet(packet);
-
-                                }
-
-                            },
-                        Err(e) => {
-                            // in theory errors only happen when the channel has no open senders
-                            if self.in_crash_behaviour {
-                                return;
-                            }
+            //give priority to commands
+            recv(self.sim_contr_recv) -> command_res => {
+                if let Ok(command) = command_res {
+                    //handle the simulation controller's command
+                    match command {
+                        DroneCommand::AddSender(id,sender)=>self.add_sender(id,sender),
+                        DroneCommand::SetPacketDropRate(pdr)=>self.set_packet_droprate(pdr),
+                        DroneCommand::Crash=> {
+                            self.in_crash_behaviour = true;
                         },
+                        DroneCommand::RemoveSender(id) => self.remove_channel(id), }
+                }
+            },
+            recv(self.packet_recv) -> packet_res => {
+
+                if let Ok(mut packet) = packet_res {
+                        self.handle_packet(packet);
                     }
                 }
             }
+        }
+
+        while let Ok(mut packet) = self.packet_recv.recv() {
+            self.handle_packet(packet);
         }
     }
 }
 
 impl MyDrone {
+    fn handle_packet(&mut self, mut packet: Packet) {
+        // each match branch may call a function to handle it to make it more readable
+
+        //temporary and just for testing
+        log::debug!(
+            "{} at {} - packet: {}",
+            " <- packet received".green(),
+            self.drone_id,
+            packet
+        );
+
+        // flood_request works very differently from the other types as it's a broadcast, as such it's handled on its own
+        if let PacketType::FloodRequest(request) = &packet.pack_type {
+            // if there's no recipient error, handle flood_requests normally
+            self.forward_flood_request(packet);
+        } else {
+            // handle packets that aren't flood requests
+
+            // if there's an error, create a nack
+            if let Err(nack_type) = self.check_handling_errors(&packet) {
+                // if the error occurs on Ack, Nack or FloodResponse, we send it back through the simulation controller
+                match &packet.pack_type {
+                    PacketType::Ack(_) | PacketType::Nack(_) | PacketType::FloodResponse(_) => {
+                        self.sim_contr_send
+                            .send(DroneEvent::ControllerShortcut(packet));
+                        // we don't want to forward any packet in this case since we used the shortcut, so we continue to the next recv
+                        return;
+                    }
+                    PacketType::MsgFragment(fragment) => {
+                        // if the packet is a msgfragment, then create an appropriate nack
+                        self.create_nack(fragment.fragment_index, &mut packet, nack_type);
+                    }
+                    _ => {
+                        // flood requests shouldn't reach here
+                        return;
+                    }
+                }
+            }
+
+            self.forward_packet(packet);
+        }
+    }
+
     fn check_handling_errors(&mut self, packet: &Packet) -> Result<(), (NackType)> {
         // checks if this drone is the recipient
         self.check_recipient(packet)?;
@@ -177,7 +178,6 @@ impl MyDrone {
             return Err(NackType::ErrorInRouting(self.drone_id));
         }
 
-
         use rand::Rng;
 
         let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
@@ -215,16 +215,17 @@ impl MyDrone {
     }
 
     fn forward_flood_request(&mut self, mut packet: Packet) {
-
         if let PacketType::FloodRequest(mut flood_request) = packet.pack_type {
             // push node into path_trace, this assures that every edge can be reconstructed by the initiator node
             flood_request
                 .path_trace
                 .push((self.drone_id, NodeType::Drone));
 
-                //insert returns whether the element was already present in the set
-            if !self.floods_tracker
-                .insert((flood_request.initiator_id, flood_request.flood_id)) || self.packet_send.len() == 1
+            //insert returns whether the element was already present in the set
+            if !self
+                .floods_tracker
+                .insert((flood_request.initiator_id, flood_request.flood_id))
+                || self.packet_send.len() == 1
             {
                 //send flood response back, since node is already visited
                 let new_flood_res = FloodResponse {
@@ -233,7 +234,8 @@ impl MyDrone {
                 };
 
                 // creates inverted route starting from path_trace
-                let mut inverse_route: Vec<NodeId> = new_flood_res.path_trace.iter().map(|(id, _)| *id).collect();
+                let mut inverse_route: Vec<NodeId> =
+                    new_flood_res.path_trace.iter().map(|(id, _)| *id).collect();
                 // ignore the rare occurrances where a loop might be created as its not computationally viable to consider it
                 inverse_route.reverse();
 
@@ -257,13 +259,15 @@ impl MyDrone {
                 let neighbors: Vec<_> = self.packet_send.keys().cloned().collect(); // should tecnically avoid cloning the crossbeam channel
                 for neighbor_id in neighbors {
                     // take the second to last, as the last one is the one we just added
-                    let prev_neighbor = flood_request.path_trace.get(flood_request.path_trace.len() - 2);
+                    let prev_neighbor = flood_request
+                        .path_trace
+                        .get(flood_request.path_trace.len() - 2);
 
                     // since flooding is a no guarantee "protocol" (like UDP), the drone shouldn't crash if a badly formed request is created
                     if let Some((previous_neighbor, _)) = prev_neighbor {
                         if neighbor_id != *previous_neighbor {
                             // do not send to the node the request is coming from
-    
+
                             let packet = Packet {
                                 pack_type: PacketType::FloodRequest(flood_request.clone()),
                                 routing_header: SourceRoutingHeader {
@@ -275,7 +279,10 @@ impl MyDrone {
                             self.forward_routingless_packet(packet, neighbor_id);
                         }
                     } else {
-                        log::error!("The path_trace was missing an element: {:?}", flood_request.path_trace);
+                        log::error!(
+                            "The path_trace was missing an element: {:?}",
+                            flood_request.path_trace
+                        );
                     }
                 }
             }
@@ -293,9 +300,9 @@ impl MyDrone {
                 self.drone_id,
                 packet
             );
-    
+
             let res = sender.send(packet.clone());
-    
+
             if let Err(mut packet) = res {
                 log::error!("The send inside channel gave an error, this shouldn't be happening");
             } else {
@@ -339,6 +346,4 @@ impl MyDrone {
 }
 
 #[test]
-fn test() {
-
-}
+fn test() {}
