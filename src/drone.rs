@@ -11,7 +11,7 @@ use rand::seq::index;
 use wg_2024::{
     controller::{DroneCommand, DroneEvent},
     network::{NodeId, SourceRoutingHeader},
-    packet::{FloodResponse, Nack, NackType, NodeType, Packet},
+    packet::{self, FloodResponse, Nack, NackType, NodeType, Packet},
 };
 use wg_2024::{drone::Drone as DroneTrait, packet::PacketType};
 
@@ -50,6 +50,7 @@ impl DroneTrait for MyDrone {
 
     fn run(&mut self) {
         loop {
+            if !self.in_crash_behaviour {
             select_biased! {
                 //give priority to commands
                 recv(self.sim_contr_recv) -> command_res => {
@@ -66,9 +67,26 @@ impl DroneTrait for MyDrone {
                 },
                 recv(self.packet_recv) -> packet_res => {
 
-                    match packet_res {
-                        Ok(mut packet) => {
-                            // each match branch may call a function to handle it to make it more readable
+                    if let Ok(mut packet) = packet_res {
+                            self.handle_packet(packet);
+                        }
+                    }
+                }
+            }
+
+            while let Ok(mut packet) = self.packet_recv.recv() {
+                self.handle_packet(packet);
+            }
+
+        }
+    }
+}
+
+
+impl MyDrone {
+
+    fn handle_packet(&mut self, mut packet: Packet) {
+        // each match branch may call a function to handle it to make it more readable
 
                                 //temporary and just for testing
                                 log::debug!("{} at {} - packet: {}", " <- packet received".green(), self.drone_id, packet);
@@ -90,7 +108,7 @@ impl DroneTrait for MyDrone {
                                             PacketType::FloodResponse(_) => {
                                                 self.sim_contr_send.send(DroneEvent::ControllerShortcut(packet));
                                                 // we don't want to forward any packet in this case since we used the shortcut, so we continue to the next recv
-                                                continue;
+                                                return;
                                             },
                                             PacketType::MsgFragment(fragment) => {
                                                 // if the packet is a msgfragment, then create an appropriate nack
@@ -98,7 +116,7 @@ impl DroneTrait for MyDrone {
                                             },
                                             _ => {
                                                 // flood requests shouldn't reach here
-                                                continue;
+                                                return;
                                             }
                                         }
                                     }
@@ -106,22 +124,8 @@ impl DroneTrait for MyDrone {
                                     self.forward_packet(packet);
 
                                 }
-
-                            },
-                        Err(e) => {
-                            // in theory errors only happen when the channel has no open senders
-                            if self.in_crash_behaviour {
-                                return;
-                            }
-                        },
-                    }
-                }
-            }
-        }
     }
-}
 
-impl MyDrone {
     fn check_handling_errors(&mut self, packet: &Packet) -> Result<(), (NackType)> {
         // checks if this drone is the recipient
         self.check_recipient(packet)?;
