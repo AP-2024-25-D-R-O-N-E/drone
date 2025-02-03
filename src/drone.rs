@@ -181,7 +181,7 @@ impl MyDrone {
         use rand::Rng;
 
         let prob: f32 = rand::thread_rng().gen_range(0.0..1.0);
-        if prob <= self.pdr {
+        if prob < self.pdr {
             // if the packet gets dropped, send an event to the simulation controller
             self.sim_contr_send
                 .send(DroneEvent::PacketDropped(packet.clone()));
